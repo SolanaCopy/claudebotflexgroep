@@ -1,6 +1,6 @@
 """
-Telegram Bot die Claude gebruikt om berichten te beantwoorden.
-Ondersteunt multi-turn gesprekken met geheugen per gebruiker.
+Telegram Bot that uses Claude to answer messages.
+Supports multi-turn conversations with per-user memory.
 """
 
 import os
@@ -21,17 +21,17 @@ from telegram.ext import (
 )
 from telegram.constants import ChatAction
 
-# Laad omgevingsvariabelen
+# Load environment variables
 load_dotenv()
 
-# Logging instellen
+# Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# Configuratie
+# Configuration
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
@@ -39,7 +39,7 @@ FLEXBOT_SERVER = os.getenv("FLEXBOT_SERVER", "https://flexbot-qpf2.onrender.com"
 FLEXBOT_KEY = os.getenv("FLEXBOT_KEY", "Tanger2026@")
 COMMUNITY_CHAT_ID = int(os.getenv("COMMUNITY_CHAT_ID", "-1003611276978"))
 
-# Milestone tracking bestand
+# Milestone tracking file
 MILESTONE_FILE = os.path.join(os.path.dirname(__file__), "data", "milestones.json")
 
 def load_milestones() -> dict:
@@ -69,109 +69,109 @@ def save_poll_state(data: dict) -> None:
     with open(POLL_FILE, "w") as f:
         json.dump(data, f)
 
-# Anthropic client aanmaken
+# Create Anthropic client
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# Gespreksgeheugen per gebruiker opslaan: {user_id: [messages]}
+# Per-user conversation memory: {user_id: [messages]}
 conversation_history: dict[int, list[dict]] = {}
 
-SYSTEM_PROMPT = """Je bent Flexbot, de AI-assistent van de Flexbot trading community.
+SYSTEM_PROMPT = """You are Flexbot, the AI assistant of the Flexbot trading community.
 
-VEELGESTELDE VRAGEN — gebruik deze antwoorden als basis:
+FREQUENTLY ASKED QUESTIONS — use these answers as a basis:
 
-1. Wat is Flexbot?
-→ Flexbot is een volledig automatische Expert Advisor (EA) voor MetaTrader 5, speciaal ontwikkeld voor het halen van FTMO challenges. De bot handelt XAUUSD (goud), analyseert live de charts en opent en sluit trades volledig zelfstandig.
+1. What is Flexbot?
+→ Flexbot is a fully automated Expert Advisor (EA) for MetaTrader 5, specifically built for passing FTMO challenges. The bot trades XAUUSD (gold), analyzes charts live and opens and closes trades fully on its own.
 
-2. Wat kost het?
-→ Neem contact op met de admin voor de actuele prijzen en beschikbare pakketten. Betaling gaat via USDT op het ERC-20 netwerk. Na betaling ontvang je het EA-bestand en hulp bij de installatie.
+2. What does it cost?
+→ Contact the admin for current pricing and available packages. Payment is via USDT on the ERC-20 network. After payment you receive the EA file and help with installation.
 
-3. Hoe installeer ik de EA?
-→ 1) Download en installeer MetaTrader 5 bij je broker. 2) Kopieer het Flexbot EA-bestand naar de map: Bestand → Data Map Openen → MQL5 → Experts. 3) Herstart MT5. 4) Sleep de EA vanuit de Navigator op een XAUUSD chart. 5) Zorg dat AutoTrading aan staat (groene knop bovenin). De admin helpt je met de juiste instellingen als je er niet uitkomt.
+3. How do I install the EA?
+→ 1) Download and install MetaTrader 5 with your broker. 2) Copy the Flexbot EA file to: File → Open Data Folder → MQL5 → Experts. 3) Restart MT5. 4) Drag the EA from the Navigator onto an XAUUSD chart. 5) Make sure AutoTrading is enabled (green button at the top). The admin will help you with the right settings if needed.
 
-4. Welke broker?
-→ Flexbot werkt op elke broker die MetaTrader 5 aanbiedt. Voor FTMO challenges gebruik je uiteraard het FTMO platform. Om te testen raden we Vantage aan vanwege lage spreads op goud.
+4. Which broker?
+→ Flexbot works on any broker that offers MetaTrader 5. For FTMO challenges you obviously use the FTMO platform. For testing we recommend Vantage for its low spreads on gold.
 
-5. Welke pairs?
-→ Flexbot is specifiek ontwikkeld en geoptimaliseerd voor XAUUSD (goud). Dit is de enige pair die ondersteund wordt.
+5. Which pairs?
+→ Flexbot is specifically built and optimized for XAUUSD (gold). This is the only pair supported.
 
-6. Resultaten/winst?
-→ De bot is geoptimaliseerd voor FTMO challenges met een slagingspercentage van 79% in backtests (1 jaar data, realistisch met spread en slippage). Resultaten variëren — trading brengt altijd risico met zich mee. Begin altijd eerst op een demo account.
+6. Results/profit?
+→ The bot is optimized for FTMO challenges with a 79% success rate in backtests (1 year of data, realistic with spread and slippage). Results vary — trading always carries risk. Always start on a demo account first.
 
-7. Is het veilig voor FTMO?
-→ Ja. De bot is speciaal gebouwd met alle FTMO regels in gedachten. Hij riskeert maximaal 0.5% per trade, vermijdt high-impact nieuws, doet geen one-side betting, en voorkomt andere patronen waar FTMO op let. De EA draait lokaal op jouw MT5, jij houdt 100% controle.
+7. Is it safe for FTMO?
+→ Yes. The bot is built with all FTMO rules in mind. It risks max 0.5% per trade, avoids high-impact news, doesn't do one-side betting, and prevents other patterns FTMO watches for. The EA runs locally on your MT5 — you stay in 100% control.
 
-8. Werkt het op MT4?
-→ Nee, Flexbot is exclusief gebouwd voor MetaTrader 5 (MT5).
+8. Does it work on MT4?
+→ No, Flexbot is built exclusively for MetaTrader 5 (MT5).
 
-9. Kan ik de instellingen aanpassen?
-→ De standaard instellingen zijn zorgvuldig geoptimaliseerd voor FTMO challenges. We raden aan om deze niet te wijzigen. Neem contact op met de admin als je toch iets wilt aanpassen.
+9. Can I change the settings?
+→ The default settings are carefully optimized for FTMO challenges. We recommend not changing them. Contact the admin if you still want to adjust something.
 
-10. Hoe krijg ik support?
-→ Stel je vraag hier in de groep of stuur een DM naar de admin.
+10. How do I get support?
+→ Ask your question here in the group or DM the admin.
 
-11. Hoeveel startkapitaal heb ik nodig?
-→ Voor FTMO kies je zelf je challenge grootte (bijv. $10K, $25K, $50K, $100K). De bot schaalt automatisch mee met de accountgrootte en riskeert altijd max 0.5% per trade.
+11. How much starting capital do I need?
+→ For FTMO you choose your challenge size (e.g. $10K, $25K, $50K, $100K). The bot scales automatically with the account size and always risks max 0.5% per trade.
 
-12. Moet mijn PC altijd aan staan?
-→ Ja, de EA moet actief draaien op MT5. We raden een VPS aan zodat de bot 24/5 draait zonder onderbrekingen. Vooral bij een FTMO challenge wil je geen gemiste trades. De admin kan je hierbij helpen.
+12. Does my PC always have to be on?
+→ Yes, the EA needs to be running on MT5. We recommend a VPS so the bot runs 24/5 without interruptions. Especially during an FTMO challenge you don't want missed trades. The admin can help with this.
 
-13. Hoeveel trades plaatst de bot per dag?
-→ Dat hangt af van de markt. De bot wacht geduldig op de juiste condities en forceert nooit een trade. Kwaliteit boven kwantiteit — belangrijk voor het halen van je challenge.
+13. How many trades does the bot place per day?
+→ Depends on the market. The bot patiently waits for the right conditions and never forces a trade. Quality over quantity — important for passing your challenge.
 
-14. Hoe gaat de bot om met nieuws?
-→ De bot vermijdt automatisch traden rond high-impact nieuwsmomenten. Dit beschermt je tegen onvoorspelbare marktbewegingen en is in lijn met wat FTMO verwacht van verantwoord risicobeheer.
+14. How does the bot handle news?
+→ The bot automatically avoids trading around high-impact news events. This protects you from unpredictable market moves and aligns with what FTMO expects of responsible risk management.
 
-15. Wat als mijn internet wegvalt?
-→ Openstaande trades blijven staan bij je broker met hun SL en TP, dus je bent altijd beschermd. Bij herverbinding gaat de bot verder. Een VPS voorkomt dit probleem.
+15. What if my internet drops?
+→ Open trades stay with your broker with their SL and TP, so you're always protected. On reconnect the bot continues. A VPS prevents this issue.
 
-16. Heeft de bot een stop-loss?
-→ Ja, elke trade heeft een stop-loss en take-profit. Maximaal 0.5% risico per trade. Zo blijf je ruim binnen de FTMO drawdown limieten.
+16. Does the bot have a stop-loss?
+→ Yes, every trade has a stop-loss and take-profit. Max 0.5% risk per trade. That keeps you well within the FTMO drawdown limits.
 
-17. Kan ik de bot op meerdere accounts draaien?
-→ Dat hangt af van je licentie. Neem contact op met de admin voor de mogelijkheden.
+17. Can I run the bot on multiple accounts?
+→ Depends on your license. Contact the admin for options.
 
-18. Wordt de bot ge-update?
-→ Ja, Flexbot wordt continu verbeterd en geoptimaliseerd. Updates worden via de community gedeeld.
+18. Is the bot updated?
+→ Yes, Flexbot is continuously improved and optimized. Updates are shared via the community.
 
-19. Werkt de bot ook in het weekend?
-→ Nee, de forexmarkt is gesloten in het weekend. De bot handelt alleen wanneer de markt open is.
+19. Does the bot work on weekends?
+→ No, the forex market is closed on weekends. The bot only trades when the market is open.
 
-20. Wat is one-side betting en doet de bot dat?
-→ One-side betting is steeds dezelfde richting traden (alleen buy of alleen sell). FTMO let hierop. Flexbot handelt beide richtingen op basis van de marktanalyse, dus dit is geen probleem.
+20. What is one-side betting and does the bot do that?
+→ One-side betting is always trading the same direction (only buy or only sell). FTMO watches for this. Flexbot trades both directions based on market analysis, so this is not an issue.
 
-21. Hoe lang duurt het om een challenge te halen?
-→ Dat verschilt per marktperiode. De bot haalt het target niet in één dag — hij handelt consistent en veilig. Gemiddeld is het realistisch binnen de challenge periode als de markt meewerkt.
+21. How long does it take to pass a challenge?
+→ It varies per market period. The bot doesn't hit the target in one day — it trades consistently and safely. On average it's realistic within the challenge period if the market cooperates.
 
-22. Wat als de bot verlies maakt?
-→ Verlies hoort bij trading. De bot houdt verliezen klein (max 0.5% per trade) zodat je ruim binnen de FTMO daily loss en max drawdown limieten blijft.
+22. What if the bot makes a loss?
+→ Losses are part of trading. The bot keeps losses small (max 0.5% per trade) so you stay well within the FTMO daily loss and max drawdown limits.
 
-23. Hoe zet ik de bot uit?
-→ Klik op "AutoTrading" in MT5 (wordt rood) of verwijder de EA van de chart. Openstaande trades blijven staan met hun SL/TP.
+23. How do I turn the bot off?
+→ Click "AutoTrading" in MT5 (turns red) or remove the EA from the chart. Open trades remain with their SL/TP.
 
-24. Kan ik de bot eerst testen?
-→ Ja, open een gratis demo account en draai de bot daarop. Zo kun je zonder risico zien hoe hij werkt voordat je een FTMO challenge start.
+24. Can I test the bot first?
+→ Yes, open a free demo account and run the bot on it. That way you can see how it works risk-free before starting an FTMO challenge.
 
-25. Wat als ik de FTMO challenge niet haal?
-→ Geen enkele bot kan 100% slagingsgarantie geven. De bot is geoptimaliseerd voor het beste slagingspercentage, maar marktomstandigheden spelen altijd een rol. Je kunt altijd een nieuwe challenge starten.
+25. What if I don't pass the FTMO challenge?
+→ No bot can give a 100% guarantee. The bot is optimized for the best success rate, but market conditions always play a role. You can always start a new challenge.
 
-REGELS:
-- Beantwoord ALLEEN vragen over: Flexbot EA, trading (forex/XAUUSD), FTMO, en support.
-- Alles buiten scope: "Ik ben er alleen voor Flexbot, trading en support! 🤖📈"
-- Antwoord EXTREEM KORT: max 1-2 zinnen. NOOIT meer dan 3 zinnen. Geen opsommingen, geen bullet points, geen uitleg tenzij gevraagd.
-- Gebruik de taal van de gebruiker (NL of EN).
-- Praat menselijk en chill, zoals een vriend in een groepschat. Korte zinnen. Geen stijve AI-taal. Af en toe een emoji maar niet overdrijven.
-- VERBODEN: lange paragrafen, meerdere alinea's, disclaimers, "als je meer wilt weten". Gewoon kort antwoorden en klaar.
-- Bij vragen over nieuws: leg uit wat het event betekent en hoe goud daar historisch op reageert. Zeg NOOIT dat je de markt kunt voorspellen — geef alleen context en historische tendensen.
-- Als de bot niet handelt vanwege news blackout, leg uit welk event eraan komt.
-- Als iemand scheldt, spam stuurt, of scam-achtige berichten plaatst (bijv. "stuur crypto naar...", "gegarandeerde winst", verdachte links), reageer streng maar kort: "⚠️ Dit soort berichten zijn hier niet welkom. Houd het respectvol en on-topic."
+RULES:
+- ALWAYS reply in English, regardless of the user's language.
+- Only answer questions about: Flexbot EA, trading (forex/XAUUSD), FTMO, and support.
+- Anything out of scope: "I'm only here for Flexbot, trading and support! 🤖📈"
+- Answer EXTREMELY SHORT: max 1-2 sentences. NEVER more than 3 sentences. No lists, no bullet points, no explanations unless asked.
+- Talk human and chill, like a friend in a group chat. Short sentences. No stiff AI-speak. The occasional emoji but don't overdo it.
+- FORBIDDEN: long paragraphs, multiple paragraphs, disclaimers, "if you'd like to know more". Just short answers and done.
+- For news questions: explain what the event means and how gold has historically reacted. NEVER claim you can predict the market — only give context and historical tendencies.
+- If the bot isn't trading due to news blackout, explain which event is coming up.
+- If someone curses, spams, or posts scam-like messages (e.g. "send crypto to...", "guaranteed profit", suspicious links), respond firmly but short: "⚠️ This kind of message is not welcome here. Keep it respectful and on-topic."
 """
 
 
 async def fetch_live_data() -> str:
-    """Haal live trade data op van de Flexbot server."""
+    """Fetch live trade data from the Flexbot server."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            # Haal recente trades, server state en nieuws op
+            # Fetch recent trades, server state and news
             trades_resp = await client.get(
                 f"{FLEXBOT_SERVER}/api/mc/trades",
                 params={"key": FLEXBOT_KEY, "limit": 10},
@@ -191,7 +191,7 @@ async def fetch_live_data() -> str:
                 data = trades_resp.json()
                 trades = data.get("trades", data) if isinstance(data, dict) else data
                 if trades:
-                    parts.append("LAATSTE TRADES:")
+                    parts.append("LATEST TRADES:")
                     for t in trades[:10]:
                         direction = t.get("direction", "?")
                         sl = t.get("sl", "?")
@@ -201,34 +201,34 @@ async def fetch_live_data() -> str:
                         profit = t.get("close_result", "?")
                         created = t.get("created_at_ms", 0)
                         closed = t.get("closed_at_ms", 0)
-                        # Converteer timestamps naar leesbare tijd
+                        # Convert timestamps to readable time
                         from datetime import datetime, timezone
                         open_str = datetime.fromtimestamp(created / 1000, tz=timezone.utc).strftime("%d-%m %H:%M") if created else "?"
                         close_str = datetime.fromtimestamp(closed / 1000, tz=timezone.utc).strftime("%d-%m %H:%M") if closed else "?"
                         parts.append(
                             f"- {direction} | SL:{sl} TP:{tp} | "
-                            f"status:{status} | uitkomst:{outcome} | resultaat:{profit} | "
-                            f"geopend:{open_str} gesloten:{close_str}"
+                            f"status:{status} | outcome:{outcome} | result:{profit} | "
+                            f"opened:{open_str} closed:{close_str}"
                         )
 
             if state_resp.status_code == 200:
                 state = state_resp.json()
 
-                # EA posities (equity, balance, open trades)
+                # EA positions (equity, balance, open trades)
                 ea_pos = state.get("ea_positions", [])
                 if ea_pos:
                     parts.append("\nACCOUNT STATUS:")
                     for p in ea_pos:
-                        has_pos = "JA" if p.get("has_position") else "NEE"
+                        has_pos = "YES" if p.get("has_position") else "NO"
                         parts.append(
                             f"- Account:{p.get('account_login')} | Equity:${p.get('equity')} | "
-                            f"Balance:${p.get('balance')} | Open positie:{has_pos}"
+                            f"Balance:${p.get('balance')} | Open position:{has_pos}"
                         )
 
-                # Markt status
+                # Market status
                 market = state.get("market", {})
                 blocked = market.get("blocked", False)
-                parts.append(f"\nMARKT: {'GEBLOKKEERD - ' + str(market.get('reason', '')) if blocked else 'OPEN'}")
+                parts.append(f"\nMARKET: {'BLOCKED - ' + str(market.get('reason', '')) if blocked else 'OPEN'}")
 
                 # Trade gates
                 gates = state.get("trade_gates", {})
@@ -242,7 +242,7 @@ async def fetch_live_data() -> str:
                     news_pass = news.get("pass", True)
                     parts.append(
                         f"GATES: {verdict} | Daily DD:{dd_pct}% | "
-                        f"Consecutive losses:{losses} | News blackout:{'NEE' if news_pass else 'JA'}"
+                        f"Consecutive losses:{losses} | News blackout:{'NO' if news_pass else 'YES'}"
                     )
 
                 # Signal prep
@@ -250,16 +250,16 @@ async def fetch_live_data() -> str:
                 if prep:
                     price = prep.get("price", "?")
                     trend = prep.get("trend", "?")
-                    parts.append(f"HUIDIGE PRIJS: {price} | TREND: {trend}")
+                    parts.append(f"CURRENT PRICE: {price} | TREND: {trend}")
 
             if news_resp.status_code == 200:
                 news_data = news_resp.json()
                 events = news_data.get("events", [])
                 if events:
-                    # Filter alleen USD events (relevant voor goud)
+                    # Only USD events (relevant for gold)
                     usd_events = [e for e in events if e.get("currency") == "USD"]
                     if usd_events:
-                        parts.append("\nUSD NIEUWS EVENTS (high impact):")
+                        parts.append("\nUSD NEWS EVENTS (high impact):")
                         for e in usd_events:
                             title = e.get("title", "?")
                             ts = e.get("ts", 0)
@@ -273,71 +273,71 @@ async def fetch_live_data() -> str:
                                 f"previous:{previous} | actual:{actual or '-'}"
                             )
 
-            return "\n".join(parts) if parts else "Geen live data beschikbaar."
+            return "\n".join(parts) if parts else "No live data available."
 
     except Exception as e:
-        logger.warning(f"Kon live data niet ophalen: {e}")
-        return "Live data tijdelijk niet beschikbaar."
+        logger.warning(f"Could not fetch live data: {e}")
+        return "Live data temporarily unavailable."
 
 
 def get_history(user_id: int) -> list[dict]:
-    """Geef de gespreksgeschiedenis van een gebruiker terug."""
+    """Return the conversation history for a user."""
     return conversation_history.get(user_id, [])
 
 
 def add_to_history(user_id: int, role: str, content: str) -> None:
-    """Voeg een bericht toe aan de gespreksgeschiedenis."""
+    """Append a message to the conversation history."""
     if user_id not in conversation_history:
         conversation_history[user_id] = []
 
     conversation_history[user_id].append({"role": role, "content": content})
 
-    # Begrens de geschiedenis tot MAX_HISTORY berichten (altijd in paren)
+    # Cap history at MAX_HISTORY messages (always in pairs)
     history = conversation_history[user_id]
     if len(history) > MAX_HISTORY:
-        # Verwijder de oudste twee berichten (user + assistant paar)
+        # Drop the oldest two messages (user + assistant pair)
         conversation_history[user_id] = history[-MAX_HISTORY:]
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/start commando handler."""
+    """/start command handler."""
     user = update.effective_user
     await update.message.reply_text(
-        f"Hallo {user.first_name}! 👋\n\n"
-        "Ik ben Flexbot, de AI-assistent van deze community. "
-        "Stel me gerust een vraag!\n\n"
-        "Gebruik /help voor meer informatie of /reset om het gesprek opnieuw te beginnen."
+        f"Hi {user.first_name}! 👋\n\n"
+        "I'm Flexbot, the AI assistant of this community. "
+        "Feel free to ask me a question!\n\n"
+        "Use /help for more info or /reset to start the conversation over."
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/help commando handler."""
+    """/help command handler."""
     await update.message.reply_text(
         "🤖 *Flexbot*\n\n"
-        "*Commando's:*\n"
-        "/start - Start de bot\n"
-        "/help - Toon dit helpbericht\n"
-        "/reset - Wis het gespreksgeheugen\n\n"
-        "*Gebruik:*\n"
-        "Stuur gewoon een bericht en ik antwoord met behulp van Claude AI. "
-        "Ik onthoud de context van ons gesprek!\n\n"
-        f"_Maximaal {MAX_HISTORY} berichten worden onthouden._",
+        "*Commands:*\n"
+        "/start - Start the bot\n"
+        "/help - Show this help message\n"
+        "/reset - Clear the conversation memory\n\n"
+        "*Usage:*\n"
+        "Just send a message and I'll reply using Claude AI. "
+        "I remember the context of our conversation!\n\n"
+        f"_Up to {MAX_HISTORY} messages are remembered._",
         parse_mode="Markdown",
     )
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/reset commando handler – wist de gespreksgeschiedenis."""
+    """/reset command handler – clears the conversation history."""
     user_id = update.effective_user.id
     conversation_history.pop(user_id, None)
     await update.message.reply_text(
-        "🔄 Gespreksgeheugen gewist! We beginnen opnieuw."
+        "🔄 Conversation memory cleared! Starting fresh."
     )
 
 
 import re
 
-# Scheldwoorden en scam patronen
+# Profanity and scam patterns
 BANNED_WORDS = [
     "kanker", "tering", "tyfus", "hoer", "kut", "fuck", "shit", "nigger",
     "nigga", "flikker", "mongool", "retard", "bitch", "asshole", "dick",
@@ -351,14 +351,14 @@ SCAM_PATTERNS = [
     r"invest\s+\$?\d+.*get\s+\$?\d+",
     r"double\s+your\s+(money|crypto|investment)",
     r"free\s+(signals|money|crypto)",
-    r"t\.me/[a-zA-Z0-9_]+",  # Telegram links (mogelijke spam groepen)
-    r"bit\.ly/",  # Verkorte links
+    r"t\.me/[a-zA-Z0-9_]+",  # Telegram links (potential spam groups)
+    r"bit\.ly/",  # Shortened links
     r"wa\.me/",  # WhatsApp links
 ]
 
 
 async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Check bericht op scheldwoorden en scam. Returns True als bericht geblokkeerd is."""
+    """Check message for profanity and scam. Returns True if the message was blocked."""
     if not update.message or not update.message.text:
         return False
 
@@ -366,7 +366,7 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id = update.effective_chat.id
     user = update.effective_user
 
-    # Check scheldwoorden
+    # Check profanity
     for word in BANNED_WORDS:
         if word in text:
             try:
@@ -375,12 +375,12 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 pass
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ @{user.username or user.first_name}, scheldwoorden zijn hier niet welkom. Houd het respectvol!",
+                text=f"⚠️ @{user.username or user.first_name}, profanity is not welcome here. Keep it respectful!",
             )
-            logger.info(f"Moderatie: scheldwoord van {user.id} verwijderd")
+            logger.info(f"Moderation: profanity from {user.id} removed")
             return True
 
-    # Check scam patronen
+    # Check scam patterns
     for pattern in SCAM_PATTERNS:
         if re.search(pattern, text, re.IGNORECASE):
             try:
@@ -389,49 +389,49 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 pass
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🚫 Spam/scam gedetecteerd en verwijderd. Dit soort berichten zijn hier niet toegestaan.",
+                text=f"🚫 Spam/scam detected and removed. This kind of message is not allowed here.",
             )
-            logger.info(f"Moderatie: scam/spam van {user.id} verwijderd")
+            logger.info(f"Moderation: scam/spam from {user.id} removed")
             return True
 
     return False
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Verwerk inkomende berichten en beantwoord via Claude."""
+    """Process incoming messages and reply via Claude."""
     user_id = update.effective_user.id
     user_text = update.message.text
 
-    logger.info(f"Bericht van gebruiker {user_id}: {user_text[:50]}...")
+    logger.info(f"Message from user {user_id}: {user_text[:50]}...")
 
-    # Moderatie: check op scheldwoorden, scam, spam
+    # Moderation: check for profanity, scam, spam
     if await moderate_message(update, context):
-        return  # Bericht is al afgehandeld door moderatie
+        return  # Message already handled by moderation
 
-    # Toon 'typing...' indicator
+    # Show 'typing...' indicator
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=ChatAction.TYPING,
     )
 
-    # Haal live trade data op van de server
+    # Fetch live trade data from the server
     live_data = await fetch_live_data()
 
-    # Voeg het gebruikersbericht toe aan de geschiedenis
+    # Add the user message to the history
     add_to_history(user_id, "user", user_text)
 
     try:
-        # Bouw system prompt met live data
+        # Build system prompt with live data
         system_with_data = (
             SYSTEM_PROMPT
-            + "\n\nLIVE DATA VAN DE SERVER (REAL-TIME, ALTIJD ACTUEEL):\n"
+            + "\n\nLIVE SERVER DATA (REAL-TIME, ALWAYS CURRENT):\n"
             + live_data
-            + "\n\nBELANGRIJK: Deze live data is ALTIJD de meest recente stand. "
-            "Negeer trade info uit eerdere berichten in het gesprek — die is verouderd. "
-            "Als iemand vraagt over 'de laatste trade', gebruik ALLEEN de bovenstaande live data."
+            + "\n\nIMPORTANT: This live data is ALWAYS the most recent state. "
+            "Ignore trade info from earlier messages in the conversation — that is outdated. "
+            "If someone asks about 'the latest trade', use ONLY the live data above."
         )
 
-        # Roep Claude aan met streaming voor responsiviteit
+        # Call Claude with streaming for responsiveness
         with claude.messages.stream(
             model="claude-haiku-4-5",
             max_tokens=150,
@@ -440,51 +440,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ) as stream:
             response = stream.get_final_message()
 
-        # Haal de tekst op uit het antwoord
+        # Extract the text from the response
         assistant_text = next(
             block.text for block in response.content if block.type == "text"
         )
 
-        # Sla het antwoord op in de geschiedenis
+        # Save the response in the history
         add_to_history(user_id, "assistant", assistant_text)
 
-        # Stuur het antwoord naar de gebruiker
+        # Send the response to the user
         await update.message.reply_text(assistant_text)
 
-        logger.info(f"Antwoord verstuurd aan gebruiker {user_id}")
+        logger.info(f"Reply sent to user {user_id}")
 
     except anthropic.AuthenticationError:
-        logger.error("Ongeldige Anthropic API sleutel")
+        logger.error("Invalid Anthropic API key")
         await update.message.reply_text(
-            "❌ Configuratiefout: ongeldige API sleutel. Neem contact op met de beheerder."
+            "❌ Configuration error: invalid API key. Please contact the admin."
         )
     except anthropic.RateLimitError:
-        logger.warning("API-limiet bereikt")
+        logger.warning("API rate limit reached")
         await update.message.reply_text(
-            "⏳ Te veel verzoeken. Probeer het over een moment opnieuw."
+            "⏳ Too many requests. Please try again in a moment."
         )
     except anthropic.APIConnectionError:
-        logger.error("Verbindingsfout met Anthropic API")
+        logger.error("Connection error with Anthropic API")
         await update.message.reply_text(
-            "🌐 Verbindingsfout. Controleer de internetverbinding en probeer opnieuw."
+            "🌐 Connection error. Check your internet connection and try again."
         )
     except Exception as e:
-        logger.error(f"Onverwachte fout: {e}")
+        logger.error(f"Unexpected error: {e}")
         await update.message.reply_text(
-            "😕 Er is iets misgegaan. Probeer het opnieuw of gebruik /reset."
+            "😕 Something went wrong. Try again or use /reset."
         )
 
 
 async def send_daily_poll(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stuur dagelijkse poll: goud omhoog of omlaag? Sla openingsprijs op."""
+    """Send daily poll: gold up or down? Store the opening price."""
     now = datetime.now(timezone.utc)
-    # Alleen doordeweeks (ma=0 t/m vr=4)
+    # Weekdays only (Mon=0 .. Fri=4)
     if now.weekday() >= 5:
-        logger.info("Weekend — poll overgeslagen")
+        logger.info("Weekend — poll skipped")
         return
-    day_str = now.strftime("%A %d %B")
+    days_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    months_en = ["January", "February", "March", "April", "May", "June",
+                 "July", "August", "September", "October", "November", "December"]
+    day_str = f"{days_en[now.weekday()]} {now.day} {months_en[now.month - 1]}"
 
-    # Haal huidige goudprijs op als openingsprijs
+    # Fetch current gold price as opening price
     open_price = None
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -497,12 +500,12 @@ async def send_daily_poll(context: ContextTypes.DEFAULT_TYPE) -> None:
                 prep = state.get("signal_prep", {})
                 open_price = prep.get("price")
     except Exception as e:
-        logger.warning(f"Kon openingsprijs niet ophalen: {e}")
+        logger.warning(f"Could not fetch opening price: {e}")
 
     msg = await context.bot.send_poll(
         chat_id=COMMUNITY_CHAT_ID,
-        question=f"📊 {day_str} — Wat denk je, goud omhoog of omlaag vandaag?",
-        options=["🟢 Omhoog (bullish)", "🔴 Omlaag (bearish)", "⚪ Zijwaarts"],
+        question=f"📊 {day_str} — What's your call, gold up or down today?",
+        options=["🟢 Up (bullish)", "🔴 Down (bearish)", "⚪ Sideways"],
         is_anonymous=False,
     )
 
@@ -527,7 +530,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     user_id = str(answer.user.id)
-    user_name = answer.user.first_name or "Onbekend"
+    user_name = answer.user.first_name or "Unknown"
 
     # Verwijder oude stem van deze gebruiker
     for category in ["bullish", "bearish", "sideways"]:
@@ -586,15 +589,15 @@ async def send_poll_result(context: ContextTypes.DEFAULT_TYPE) -> None:
     if diff > 5:
         actual = "bullish"
         actual_emoji = "🟢"
-        actual_text = "OMHOOG"
+        actual_text = "UP"
     elif diff < -5:
         actual = "bearish"
         actual_emoji = "🔴"
-        actual_text = "OMLAAG"
+        actual_text = "DOWN"
     else:
         actual = "sideways"
         actual_emoji = "⚪"
-        actual_text = "ZIJWAARTS"
+        actual_text = "SIDEWAYS"
 
     votes = poll_state.get("votes", {})
     bull_count = len(votes.get("bullish", []))
@@ -608,16 +611,16 @@ async def send_poll_result(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Bouw het bericht
     lines = [
-        f"📊 **POLL RESULTAAT VAN VANDAAG**\n",
-        f"Goud open: ${open_price:.2f} → close: ${close_price:.2f}",
-        f"Beweging: {actual_emoji} {actual_text} ({pct:+.2f}%)\n",
-        f"Stemmen: 🟢 {bull_count} | 🔴 {bear_count} | ⚪ {side_count}",
+        f"📊 **TODAY'S POLL RESULT**\n",
+        f"Gold open: ${open_price:.2f} → close: ${close_price:.2f}",
+        f"Move: {actual_emoji} {actual_text} ({pct:+.2f}%)\n",
+        f"Votes: 🟢 {bull_count} | 🔴 {bear_count} | ⚪ {side_count}",
     ]
 
     if winner_names:
-        lines.append(f"\n🎯 Goed voorspeld: {', '.join(winner_names)}")
+        lines.append(f"\n🎯 Called it right: {', '.join(winner_names)}")
     elif total_votes > 0:
-        lines.append(f"\n😅 Niemand had het goed vandaag!")
+        lines.append(f"\n😅 Nobody got it right today!")
 
     # Sluit de poll
     try:
@@ -642,7 +645,7 @@ async def send_market_open(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await context.bot.send_message(
         chat_id=COMMUNITY_CHAT_ID,
-        text="☀️ Goedemorgen! De markt is open, Flexbot is actief. Let's get it! 💰",
+        text="☀️ Good morning! The market is open, Flexbot is live. Let's get it! 💰",
     )
     logger.info("Markt open melding verstuurd")
 
@@ -653,7 +656,7 @@ async def send_market_opening_soon(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await context.bot.send_message(
         chat_id=COMMUNITY_CHAT_ID,
-        text="🔔 De markt gaat zo open! Maak je klaar voor een nieuwe handelsweek. 💪",
+        text="🔔 The market is about to open! Get ready for a new trading week. 💪",
     )
     logger.info("Markt gaat straks open melding verstuurd (zondag)")
 
@@ -664,7 +667,7 @@ async def send_market_close(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await context.bot.send_message(
         chat_id=COMMUNITY_CHAT_ID,
-        text="🌙 Markt gaat zo dicht, Flexbot stopt voor vandaag. Rust lekker uit, tot morgen! 👋",
+        text="🌙 Market is closing soon, Flexbot is wrapping up for today. Have a great weekend! 👋",
     )
     logger.info("Markt dicht melding verstuurd")
 
@@ -717,11 +720,11 @@ async def check_milestones(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Dagelijkse profit milestones
         daily_milestones = {
-            250: "💰 $250 winst vandaag! Lekker bezig Flexbot! 🔥",
-            500: "🔥 $500 winst vandaag! Halve K op één dag!",
-            1000: "🚀 $1,000 winst vandaag! EEN K OP ÉÉN DAG! 💎",
-            2000: "🏆 $2,000 winst vandaag! Flexbot is niet te stoppen!",
-            5000: "👑 $5,000 winst vandaag! INSANE dag! 🚀🚀🚀",
+            250: "💰 $250 profit today! Nice work Flexbot! 🔥",
+            500: "🔥 $500 profit today! Half a K in one day!",
+            1000: "🚀 $1,000 profit today! ONE K IN A SINGLE DAY! 💎",
+            2000: "🏆 $2,000 profit today! Flexbot is unstoppable!",
+            5000: "👑 $5,000 profit today! INSANE day! 🚀🚀🚀",
         }
 
         for amount, message in daily_milestones.items():
@@ -738,7 +741,7 @@ async def check_milestones(context: ContextTypes.DEFAULT_TYPE) -> None:
         if day_wins >= 3 and "win_streak_3" not in tags:
             await context.bot.send_message(
                 chat_id=COMMUNITY_CHAT_ID,
-                text=f"🔥 {day_wins} wins op rij vandaag! Flexbot is on fire!",
+                text=f"🔥 {day_wins} wins in a row today! Flexbot is on fire!",
             )
             tags.append("win_streak_3")
             logger.info(f"Win streak milestone: {day_wins} wins")
