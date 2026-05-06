@@ -458,21 +458,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "❌ Configuration error: invalid API key. Please contact the admin."
         )
+    except anthropic.BadRequestError as e:
+        msg = str(e).lower()
+        if "credit" in msg or "billing" in msg or "balance" in msg:
+            logger.error(f"Anthropic credit/billing issue — staying silent: {e}")
+            return
+        logger.error(f"Bad request to Anthropic API: {e}")
+        return
+    except anthropic.PermissionDeniedError as e:
+        logger.error(f"Anthropic permission denied — staying silent: {e}")
+        return
     except anthropic.RateLimitError:
-        logger.warning("API rate limit reached")
-        await update.message.reply_text(
-            "⏳ Too many requests. Please try again in a moment."
-        )
+        logger.warning("API rate limit reached — staying silent")
+        return
+    except anthropic.APIStatusError as e:
+        if getattr(e, "status_code", None) in (402, 429):
+            logger.error(f"Anthropic status {e.status_code} — staying silent: {e}")
+            return
+        logger.error(f"Anthropic API error: {e}")
+        return
     except anthropic.APIConnectionError:
-        logger.error("Connection error with Anthropic API")
-        await update.message.reply_text(
-            "🌐 Connection error. Check your internet connection and try again."
-        )
+        logger.error("Connection error with Anthropic API — staying silent")
+        return
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        await update.message.reply_text(
-            "😕 Something went wrong. Try again or use /reset."
-        )
+        logger.error(f"Unexpected error — staying silent: {e}")
+        return
 
 
 async def send_daily_poll(context: ContextTypes.DEFAULT_TYPE) -> None:
