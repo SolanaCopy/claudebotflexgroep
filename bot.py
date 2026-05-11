@@ -38,6 +38,7 @@ MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 FLEXBOT_SERVER = os.getenv("FLEXBOT_SERVER", "https://flexbot-qpf2.onrender.com")
 FLEXBOT_KEY = os.getenv("FLEXBOT_KEY", "Tanger2026@")
 COMMUNITY_CHAT_ID = int(os.getenv("COMMUNITY_CHAT_ID", "-1003611276978"))
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "8210317741"))
 
 # Milestone tracking file
 MILESTONE_FILE = os.path.join(os.path.dirname(__file__), "data", "milestones.json")
@@ -299,8 +300,16 @@ def add_to_history(user_id: int, role: str, content: str) -> None:
         conversation_history[user_id] = history[-MAX_HISTORY:]
 
 
+def _is_admin(update: Update) -> bool:
+    user = update.effective_user
+    return bool(user and user.id == ADMIN_USER_ID)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/start command handler."""
+    """/start command handler — admin only."""
+    if not _is_admin(update):
+        logger.info(f"Ignored /start from non-admin user {update.effective_user.id if update.effective_user else '?'}")
+        return
     user = update.effective_user
     await update.message.reply_text(
         f"Hi {user.first_name}! 👋\n\n"
@@ -311,7 +320,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/help command handler."""
+    """/help command handler — admin only."""
+    if not _is_admin(update):
+        logger.info(f"Ignored /help from non-admin user {update.effective_user.id if update.effective_user else '?'}")
+        return
     await update.message.reply_text(
         "🤖 *Flexbot*\n\n"
         "*Commands:*\n"
@@ -327,7 +339,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/reset command handler – clears the conversation history."""
+    """/reset command handler — admin only."""
+    if not _is_admin(update):
+        logger.info(f"Ignored /reset from non-admin user {update.effective_user.id if update.effective_user else '?'}")
+        return
     user_id = update.effective_user.id
     conversation_history.pop(user_id, None)
     await update.message.reply_text(
