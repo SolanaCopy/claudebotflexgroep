@@ -372,17 +372,22 @@ async def toprefs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 parse_mode="Markdown",
             )
             return
-        lines = [f"🏆 *Referral leaderboard ({month})*\n"]
+        weights = data.get("weights") or {"paid": 10, "group": 1}
+        lines = [
+            f"🏆 *Referral leaderboard ({month})*",
+            f"_Paid customer = {weights.get('paid', 10)}pt · Group join = {weights.get('group', 1)}pt_\n",
+        ]
         medals = ["🥇", "🥈", "🥉"]
         for entry in board[:10]:
             rank = entry.get("rank", 0)
             badge = medals[rank - 1] if rank <= 3 else f"{rank}."
             name = entry.get("name", "??")
-            invites = entry.get("invites", 0)
-            plural = "invite" if invites == 1 else "invites"
-            lines.append(f"{badge}  *{name}*  —  {invites} {plural}")
-        lines.append("\n💰 Top 1 at month end wins 1 month free of Flexbot.")
-        lines.append("Use /myref to see your stats and link.")
+            pts = entry.get("points", entry.get("invites", 0))
+            paid = entry.get("paid_invites", 0)
+            grp = entry.get("group_invites", 0)
+            lines.append(f"{badge}  *{name}*  —  {pts} pts  ({paid}p / {grp}g)")
+        lines.append("\n💰 Top 1 wins **+1 month free** (existing customer) or a **LIFETIME license** (non-customer).")
+        lines.append("Use /myref to get your link and join the race.")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as e:
         logger.warning(f"toprefs failed: {e}")
@@ -390,44 +395,73 @@ async def toprefs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def myref_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/myref <api_key> — show YOUR referral stats + invite link.
+    """/myref [api_key] — show YOUR referral stats + invite link.
 
-    Customers DM the bot with their api_key from the install preset, or paste it
-    after the command in the group (will be deleted to keep it private).
+    Two paths:
+    1) Paying customer: /myref <api_key> — full stats including paid (10pt) referrals.
+    2) Free community member: /myref (no args) — auto-issues a personal invite link
+       so they can earn group-join points (1pt each) toward the lifetime prize.
     """
     args = context.args or []
     api_key = args[0].strip() if args else ""
-    if not api_key:
-        await update.message.reply_text(
-            "Send your invite stats privately:\n\n"
-            "DM me with:\n"
-            "  /myref <your_api_key>\n\n"
-            "Your api_key is in the .set preset you got with the installer "
-            "(InpEaApiKey, starts with `fb_`).",
-            parse_mode="Markdown",
-        )
-        return
-    if not api_key.startswith("fb_"):
-        await update.message.reply_text("That doesn't look like a valid api_key (should start with `fb_`).")
-        return
+
+    # Path 1: customer with api_key
+    if api_key:
+        if not api_key.startswith("fb_"):
+            await update.message.reply_text("That doesn't look like a valid api_key (should start with `fb_`).")
+            return
+        params = {"api_key": api_key}
+    else:
+        # Path 2: non-customer — identify via Telegram user id.
+        user = update.effective_user
+        if not user:
+            await update.message.reply_text("Could not identify you. Try again from the group.")
+            return
+        params = {"telegram_user_id": str(user.id)}
+        if user.username:
+            params["username"] = user.username
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{FLEXBOT_SERVER}/api/myref", params={"api_key": api_key})
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(f"{FLEXBOT_SERVER}/api/myref", params=params)
             data = r.json()
         if not data.get("ok"):
             await update.message.reply_text(f"Couldn't load your stats: {data.get('error', 'unknown')}")
             return
         link = data.get("ref_link", "—")
-        month = data.get("invites_this_month", 0)
+        tg_link = data.get("telegram_invite_link")
+        is_customer = data.get("is_customer", True)
+        weights = data.get("weights") or {"paid": 10, "group": 1}
+        paid_m = data.get("paid_invites_this_month", 0)
+        grp_m = data.get("group_invites_this_month", 0)
+        points = data.get("points_this_month", paid_m * weights.get("paid", 10) + grp_m * weights.get("group", 1))
         total = data.get("total_invites", 0)
         rank = data.get("rank_this_month", "—")
+
+        tg_block = (
+            f"💬 Group invite link (Telegram, {weights.get('group', 1)}pt each):\n`{tg_link}`\n\n"
+            if tg_link else
+            "💬 Group invite link: ask the admin to generate one for you.\n\n"
+        )
+        # Customers earn on BOTH paid (10pt) + group (1pt). Non-customers compete
+        # for the LIFETIME prize via group joins only (1pt each).
+        if is_customer:
+            paid_block = f"🌐 Website link (paid signups, {weights.get('paid', 10)}pt each):\n`{link}`\n\n"
+            prize_line = "💰 Top 1 at month end wins **+1 month free** Flexbot!"
+            share_line = "Share both links, climb the leaderboard, win."
+        else:
+            paid_block = ""
+            prize_line = "💰 Top 1 at month end wins a **LIFETIME Flexbot license** 🚀"
+            share_line = "Share your link, bring members, climb the leaderboard."
+
         msg = (
             f"🎯 *Your referral stats*\n\n"
-            f"📎 Your invite link:\n`{link}`\n\n"
-            f"📊 This month: *{month}* invites  (rank #{rank})\n"
+            f"{paid_block}"
+            f"{tg_block}"
+            f"📊 This month: *{points}* pts  (rank #{rank})\n"
+            f"    └ {paid_m} paid × {weights.get('paid', 10)}pt + {grp_m} group × {weights.get('group', 1)}pt\n"
             f"📈 All-time: *{total}* invites\n\n"
-            f"💰 Top 1 at month end wins 1 month free!\n"
-            f"Share your link, climb the leaderboard, win.\n\n"
+            f"{prize_line}\n"
+            f"{share_line}\n\n"
             f"See full board: /toprefs"
         )
         await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
@@ -907,6 +941,50 @@ VERIFY_QUESTIONS = [
 _pending_verify = {}  # key=(chat_id, user_id) -> {"task": Task, "correct": str, "username": str, "msg_id": int}
 
 
+async def _attr_post_join(user_id: int, username: str | None, inviter_code: str) -> None:
+    """Record an unverified group-join attribution on the Flexbot server."""
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(
+                f"{FLEXBOT_SERVER}/api/telegram-join",
+                params={"key": FLEXBOT_KEY},
+                json={
+                    "telegram_user_id": user_id,
+                    "username": username,
+                    "inviter_short_code": inviter_code,
+                },
+            )
+            if r.status_code != 200:
+                logger.warning(f"telegram-join attribution failed {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.warning(f"telegram-join attribution error: {e}")
+
+
+async def _attr_post_verify(user_id: int) -> None:
+    """Mark a previously-recorded join as verified (passed the captcha)."""
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(
+                f"{FLEXBOT_SERVER}/api/telegram-verify",
+                params={"key": FLEXBOT_KEY},
+                json={"telegram_user_id": user_id},
+            )
+            if r.status_code != 200:
+                logger.warning(f"telegram-verify failed {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.warning(f"telegram-verify error: {e}")
+
+
+def _parse_ref_from_invite_name(name: str | None) -> str | None:
+    """An invite link created via /admin/license/.../telegram-invite has name='ref:<short_code>'."""
+    if not name:
+        return None
+    s = str(name).strip().lower()
+    if s.startswith("ref:") and len(s) > 4:
+        return s[4:]
+    return None
+
+
 async def _kick_unverified(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
     """Kick a member who didn't verify in time."""
     try:
@@ -955,6 +1033,18 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         username = user.username or user.first_name or "newcomer"
 
         logger.info(f"New member joined: {username} ({user_id}) in chat {chat_id}")
+
+        # Referral attribution: if they joined via a per-customer invite link
+        # whose name is "ref:<short_code>", record the attribution as unverified.
+        # It only counts on the leaderboard after the captcha is solved.
+        try:
+            invite = getattr(cm, "invite_link", None)
+            inviter_code = _parse_ref_from_invite_name(getattr(invite, "name", None)) if invite else None
+            if inviter_code:
+                logger.info(f"Attributing {user_id} to inviter '{inviter_code}'")
+                asyncio.create_task(_attr_post_join(user_id, user.username, inviter_code))
+        except Exception as e:
+            logger.warning(f"invite-link attribution error: {e}")
 
         # Mute them: can't send messages until they answer correctly
         try:
@@ -1084,6 +1174,8 @@ async def on_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         pass
     await query.answer("Verified! Welcome 🚀")
     logger.info(f"Verified {target_user_id} via correct answer")
+    # Count this join on the inviter's leaderboard (no-op if no attribution row).
+    asyncio.create_task(_attr_post_verify(target_user_id))
 
 
 def main() -> None:
