@@ -886,18 +886,22 @@ VERIFY_TIMEOUT_SEC = 180  # 3 minutes
 
 # Pool of trading-leaning questions. Each is (question, correct_answer, wrong_options[]).
 VERIFY_QUESTIONS = [
-    ("What does XAUUSD stand for?",        "Gold / US Dollar",   ["Silver / USD", "Euro / USD", "Oil / USD"]),
-    ("What does 'TP' mean in trading?",    "Take Profit",        ["Trade Position", "Total Price", "Trend Pivot"]),
-    ("What does 'SL' mean in trading?",    "Stop Loss",          ["Sell Limit", "Spot Long", "Slippage"]),
-    ("What is leverage in trading?",       "Borrowed capital",   ["A chart pattern", "A type of indicator", "A trading fee"]),
-    ("Which is a major Forex pair?",       "EUR/USD",            ["BTC/ETH", "AAPL/TSLA", "USD/SOL"]),
-    ("What is a 'pip' in Forex?",          "Smallest price move", ["A type of bot", "A chart pattern", "A trader's salary"]),
-    ("FTMO is best known for:",            "Prop trading firm",  ["A crypto exchange", "A broker for stocks", "A trading book"]),
-    ("Which platform does this bot run on?","MetaTrader 5",      ["NinjaTrader", "TradingView", "Bloomberg"]),
-    ("XAUUSD trades which asset?",         "Gold",               ["Bitcoin", "Silver", "Crude oil"]),
-    ("What is a 'long' position?",         "Buy expecting up",   ["Sell expecting down", "Closing a trade", "Holding cash"]),
-    ("5 + 3 equals?",                      "8",                  ["7", "9", "12"]),
-    ("How many minutes in an hour?",       "60",                 ["30", "100", "45"]),
+    # Simple math
+    ("What is 2 + 2?",                 "4",        ["3", "5", "22"]),
+    ("What is 5 + 3?",                 "8",        ["7", "9", "12"]),
+    ("What is 10 - 4?",                "6",        ["5", "7", "14"]),
+    ("What is 3 x 3?",                 "9",        ["6", "12", "33"]),
+    ("What is 7 + 1?",                 "8",        ["6", "9", "71"]),
+    # General knowledge — obvious
+    ("How many days in a week?",       "7",        ["5", "10", "12"]),
+    ("How many minutes in an hour?",   "60",       ["30", "45", "100"]),
+    ("What color is the sky on a clear day?", "Blue", ["Red", "Green", "Purple"]),
+    ("How many legs does a dog have?", "4",        ["2", "3", "6"]),
+    ("Which one is a fruit?",          "Apple",    ["Chair", "Pencil", "Computer"]),
+    ("What do bees make?",             "Honey",    ["Milk", "Bread", "Cheese"]),
+    # Trading basics — universally known
+    ("FlexBot trades which asset?",    "Gold",     ["Stocks", "Bitcoin", "Oil"]),
+    ("Which platform does this bot use?", "MetaTrader 5", ["TradingView", "Excel", "Notepad"]),
 ]
 
 _pending_verify = {}  # key=(chat_id, user_id) -> {"task": Task, "correct": str, "username": str, "msg_id": int}
