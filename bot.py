@@ -871,36 +871,64 @@ async def check_milestones(context: ContextTypes.DEFAULT_TYPE) -> None:
 # ANTI-BOT VERIFICATION FOR NEW MEMBERS
 # ============================================================
 # Strategy:
-#   1. New member joins the group -> we restrict them (can't post) and send
-#      a public welcome with a verify button.
-#   2. They click the button within 60 seconds -> we lift the restriction.
-#   3. They don't click in time -> we kick them (ban-then-unban so they can
-#      try again later if they're real).
+#   1. New member joins -> bot mutes them (can't post)
+#   2. Bot asks a trading/general-knowledge question with 4 answer buttons
+#   3. They pick the correct one within 3 min -> permissions restored
+#   4. Wrong pick OR no pick -> kicked (ban+unban so real users can retry)
 #
-# Bots typically don't click inline buttons. Even basic CAPTCHA-on-click
-# eliminates 99% of spam.
+# A question beats a single "click here" button: bots that auto-click
+# inline buttons would have to also guess correctly out of 4 options.
 
 import asyncio
-_pending_verify = {}  # key=(chat_id, user_id) -> {"task": Task, "username": str}
+import random
+
+VERIFY_TIMEOUT_SEC = 180  # 3 minutes
+
+# Pool of trading-leaning questions. Each is (question, correct_answer, wrong_options[]).
+VERIFY_QUESTIONS = [
+    ("What does XAUUSD stand for?",        "Gold / US Dollar",   ["Silver / USD", "Euro / USD", "Oil / USD"]),
+    ("What does 'TP' mean in trading?",    "Take Profit",        ["Trade Position", "Total Price", "Trend Pivot"]),
+    ("What does 'SL' mean in trading?",    "Stop Loss",          ["Sell Limit", "Spot Long", "Slippage"]),
+    ("What is leverage in trading?",       "Borrowed capital",   ["A chart pattern", "A type of indicator", "A trading fee"]),
+    ("Which is a major Forex pair?",       "EUR/USD",            ["BTC/ETH", "AAPL/TSLA", "USD/SOL"]),
+    ("What is a 'pip' in Forex?",          "Smallest price move", ["A type of bot", "A chart pattern", "A trader's salary"]),
+    ("FTMO is best known for:",            "Prop trading firm",  ["A crypto exchange", "A broker for stocks", "A trading book"]),
+    ("Which platform does this bot run on?","MetaTrader 5",      ["NinjaTrader", "TradingView", "Bloomberg"]),
+    ("XAUUSD trades which asset?",         "Gold",               ["Bitcoin", "Silver", "Crude oil"]),
+    ("What is a 'long' position?",         "Buy expecting up",   ["Sell expecting down", "Closing a trade", "Holding cash"]),
+    ("5 + 3 equals?",                      "8",                  ["7", "9", "12"]),
+    ("How many minutes in an hour?",       "60",                 ["30", "100", "45"]),
+]
+
+_pending_verify = {}  # key=(chat_id, user_id) -> {"task": Task, "correct": str, "username": str, "msg_id": int}
 
 
 async def _kick_unverified(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
     """Kick a member who didn't verify in time."""
     try:
-        await asyncio.sleep(60)  # 60s grace period
+        await asyncio.sleep(VERIFY_TIMEOUT_SEC)
         key = (chat_id, user_id)
         if key not in _pending_verify:
             return  # already verified or left
+        pending = _pending_verify.pop(key, None)
         try:
-            # ban then immediately unban = "kick" (they can re-join later if real)
             await context.bot.ban_chat_member(chat_id, user_id)
             await context.bot.unban_chat_member(chat_id, user_id)
-            logger.info(f"Kicked unverified member {user_id} from {chat_id}")
+            logger.info(f"Kicked unverified member {user_id} (timeout)")
         except Exception as e:
             logger.warning(f"Failed to kick unverified {user_id}: {e}")
-        _pending_verify.pop(key, None)
+        # Clean up the verification message
+        if pending and pending.get("msg_id"):
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=pending["msg_id"],
+                    text=f"⏱ Verification timed out — @{pending.get('username','user')} was removed.",
+                )
+            except Exception:
+                pass
     except asyncio.CancelledError:
-        pass  # verified in time, nothing to do
+        pass
 
 
 async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -912,11 +940,11 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     new = cm.new_chat_member.status
     user = cm.new_chat_member.user
 
-    # Skip bots — we don't verify other bots that are added intentionally.
+    # Skip bots — admins add them intentionally.
     if user.is_bot:
         return
 
-    # New member just joined
+    # New member just joined (or was readded after a kick)
     if old in ("left", "kicked") and new in ("member", "restricted"):
         chat_id = cm.chat.id
         user_id = user.id
@@ -924,7 +952,7 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         logger.info(f"New member joined: {username} ({user_id}) in chat {chat_id}")
 
-        # Restrict them: can't send any messages until verified
+        # Mute them: can't send messages until they answer correctly
         try:
             await context.bot.restrict_chat_member(
                 chat_id, user_id,
@@ -933,57 +961,102 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.warning(f"Could not restrict {user_id}: {e}")
 
-        # Send public verification message
-        button = InlineKeyboardButton("✅ I'm not a bot — let me in", callback_data=f"verify:{user_id}")
-        keyboard = InlineKeyboardMarkup([[button]])
+        # Pick a random question and shuffle answers
+        question, correct, wrong = random.choice(VERIFY_QUESTIONS)
+        options = [correct] + list(wrong)
+        random.shuffle(options)
+
+        # Build inline keyboard (one button per row for readability)
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(opt, callback_data=f"verify:{user_id}:{i}")] for i, opt in enumerate(options)]
+        )
         try:
             msg = await context.bot.send_message(
                 chat_id,
-                f"👋 Welcome @{username}! Please click the button below within 60 seconds to verify you're human.\n\nUnverified accounts are removed automatically.",
+                f"👋 Welcome @{username}!\n\n"
+                f"Quick check before you can post — pick the right answer within 3 minutes:\n\n"
+                f"❓ *{question}*",
                 reply_markup=keyboard,
+                parse_mode="Markdown",
             )
         except Exception as e:
             logger.warning(f"Could not send verify message: {e}")
             return
 
-        # Schedule the kick if no click within 60s
+        # Schedule the kick if no correct answer within timeout
         key = (chat_id, user_id)
         task = asyncio.create_task(_kick_unverified(context, chat_id, user_id))
-        _pending_verify[key] = {"task": task, "username": username, "msg_id": msg.message_id}
+        _pending_verify[key] = {
+            "task": task,
+            "username": username,
+            "msg_id": msg.message_id,
+            "correct": correct,
+            "options": options,
+            "question": question,
+        }
 
 
 async def on_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the verify button click."""
+    """Handle the answer button click."""
     query = update.callback_query
     if not query or not query.data or not query.data.startswith("verify:"):
         return
 
+    parts = query.data.split(":")
+    if len(parts) != 3:
+        await query.answer("Bad button", show_alert=True)
+        return
+
     try:
-        target_user_id = int(query.data.split(":", 1)[1])
+        target_user_id = int(parts[1])
+        choice_idx = int(parts[2])
     except Exception:
         await query.answer("Bad button", show_alert=True)
         return
 
     clicker_id = query.from_user.id
     if clicker_id != target_user_id:
-        # Someone else clicked the button - reject.
-        await query.answer("This verification is not for you 🙂", show_alert=True)
+        await query.answer("This question is not for you 🙂", show_alert=True)
         return
 
     chat_id = query.message.chat.id
     key = (chat_id, target_user_id)
-    pending = _pending_verify.pop(key, None)
+    pending = _pending_verify.get(key)
     if not pending:
         await query.answer("Already verified or expired", show_alert=True)
         return
 
-    # Cancel the kick task
+    chosen = pending["options"][choice_idx] if 0 <= choice_idx < len(pending["options"]) else None
+    username = pending.get("username") or query.from_user.username or query.from_user.first_name or "trader"
+
+    # WRONG answer -> kick immediately
+    if chosen != pending["correct"]:
+        _pending_verify.pop(key, None)
+        try:
+            pending["task"].cancel()
+        except Exception:
+            pass
+        try:
+            await context.bot.ban_chat_member(chat_id, target_user_id)
+            await context.bot.unban_chat_member(chat_id, target_user_id)
+        except Exception as e:
+            logger.warning(f"Failed to kick after wrong answer: {e}")
+        try:
+            await query.edit_message_text(
+                f"❌ Wrong answer — @{username} was removed.\nIf you're human, you can re-join and try again."
+            )
+        except Exception:
+            pass
+        await query.answer("Wrong answer — kicked", show_alert=True)
+        logger.info(f"Kicked {target_user_id} after wrong answer")
+        return
+
+    # CORRECT answer -> lift restrictions
+    _pending_verify.pop(key, None)
     try:
         pending["task"].cancel()
     except Exception:
         pass
-
-    # Lift restrictions — full member permissions
     try:
         await context.bot.restrict_chat_member(
             chat_id, target_user_id,
@@ -999,16 +1072,14 @@ async def on_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.warning(f"Could not lift restriction for {target_user_id}: {e}")
 
-    # Replace the verify message with a welcome
-    username = pending.get("username") or query.from_user.username or query.from_user.first_name or "trader"
     try:
         await query.edit_message_text(
-            f"✅ @{username} verified — welcome to Flexbot! 🚀\n\nPin: latest stats & links."
+            f"✅ Welcome @{username} — verified! 🚀\n\nCheck the pinned message for live stats and your invite link."
         )
     except Exception:
         pass
     await query.answer("Verified! Welcome 🚀")
-    logger.info(f"Verified {target_user_id} in {chat_id}")
+    logger.info(f"Verified {target_user_id} via correct answer")
 
 
 def main() -> None:
