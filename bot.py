@@ -10,12 +10,14 @@ import httpx
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 import anthropic
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     PollAnswerHandler,
+    ChatMemberHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -865,6 +867,150 @@ async def check_milestones(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning(f"Milestone check fout: {e}")
 
 
+# ============================================================
+# ANTI-BOT VERIFICATION FOR NEW MEMBERS
+# ============================================================
+# Strategy:
+#   1. New member joins the group -> we restrict them (can't post) and send
+#      a public welcome with a verify button.
+#   2. They click the button within 60 seconds -> we lift the restriction.
+#   3. They don't click in time -> we kick them (ban-then-unban so they can
+#      try again later if they're real).
+#
+# Bots typically don't click inline buttons. Even basic CAPTCHA-on-click
+# eliminates 99% of spam.
+
+import asyncio
+_pending_verify = {}  # key=(chat_id, user_id) -> {"task": Task, "username": str}
+
+
+async def _kick_unverified(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
+    """Kick a member who didn't verify in time."""
+    try:
+        await asyncio.sleep(60)  # 60s grace period
+        key = (chat_id, user_id)
+        if key not in _pending_verify:
+            return  # already verified or left
+        try:
+            # ban then immediately unban = "kick" (they can re-join later if real)
+            await context.bot.ban_chat_member(chat_id, user_id)
+            await context.bot.unban_chat_member(chat_id, user_id)
+            logger.info(f"Kicked unverified member {user_id} from {chat_id}")
+        except Exception as e:
+            logger.warning(f"Failed to kick unverified {user_id}: {e}")
+        _pending_verify.pop(key, None)
+    except asyncio.CancelledError:
+        pass  # verified in time, nothing to do
+
+
+async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Triggered when someone joins/leaves/changes status in the group."""
+    cm = update.chat_member
+    if not cm:
+        return
+    old = cm.old_chat_member.status
+    new = cm.new_chat_member.status
+    user = cm.new_chat_member.user
+
+    # Skip bots — we don't verify other bots that are added intentionally.
+    if user.is_bot:
+        return
+
+    # New member just joined
+    if old in ("left", "kicked") and new in ("member", "restricted"):
+        chat_id = cm.chat.id
+        user_id = user.id
+        username = user.username or user.first_name or "newcomer"
+
+        logger.info(f"New member joined: {username} ({user_id}) in chat {chat_id}")
+
+        # Restrict them: can't send any messages until verified
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id, user_id,
+                ChatPermissions(can_send_messages=False),
+            )
+        except Exception as e:
+            logger.warning(f"Could not restrict {user_id}: {e}")
+
+        # Send public verification message
+        button = InlineKeyboardButton("✅ I'm not a bot — let me in", callback_data=f"verify:{user_id}")
+        keyboard = InlineKeyboardMarkup([[button]])
+        try:
+            msg = await context.bot.send_message(
+                chat_id,
+                f"👋 Welcome @{username}! Please click the button below within 60 seconds to verify you're human.\n\nUnverified accounts are removed automatically.",
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            logger.warning(f"Could not send verify message: {e}")
+            return
+
+        # Schedule the kick if no click within 60s
+        key = (chat_id, user_id)
+        task = asyncio.create_task(_kick_unverified(context, chat_id, user_id))
+        _pending_verify[key] = {"task": task, "username": username, "msg_id": msg.message_id}
+
+
+async def on_verify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the verify button click."""
+    query = update.callback_query
+    if not query or not query.data or not query.data.startswith("verify:"):
+        return
+
+    try:
+        target_user_id = int(query.data.split(":", 1)[1])
+    except Exception:
+        await query.answer("Bad button", show_alert=True)
+        return
+
+    clicker_id = query.from_user.id
+    if clicker_id != target_user_id:
+        # Someone else clicked the button - reject.
+        await query.answer("This verification is not for you 🙂", show_alert=True)
+        return
+
+    chat_id = query.message.chat.id
+    key = (chat_id, target_user_id)
+    pending = _pending_verify.pop(key, None)
+    if not pending:
+        await query.answer("Already verified or expired", show_alert=True)
+        return
+
+    # Cancel the kick task
+    try:
+        pending["task"].cancel()
+    except Exception:
+        pass
+
+    # Lift restrictions — full member permissions
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id, target_user_id,
+            ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True, can_send_documents=True,
+                can_send_photos=True, can_send_videos=True,
+                can_send_video_notes=True, can_send_voice_notes=True,
+                can_send_polls=True, can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"Could not lift restriction for {target_user_id}: {e}")
+
+    # Replace the verify message with a welcome
+    username = pending.get("username") or query.from_user.username or query.from_user.first_name or "trader"
+    try:
+        await query.edit_message_text(
+            f"✅ @{username} verified — welcome to Flexbot! 🚀\n\nPin: latest stats & links."
+        )
+    except Exception:
+        pass
+    await query.answer("Verified! Welcome 🚀")
+    logger.info(f"Verified {target_user_id} in {chat_id}")
+
+
 def main() -> None:
     """Start de Telegram bot."""
     logger.info("Bot wordt gestart...")
@@ -880,6 +1026,10 @@ def main() -> None:
     app.add_handler(CommandHandler("toprefs", toprefs_command))
     app.add_handler(CommandHandler("myref", myref_command))
     app.add_handler(CommandHandler("leaderboard", toprefs_command))
+
+    # Anti-bot verification for new members
+    app.add_handler(ChatMemberHandler(on_chat_member, ChatMemberHandler.CHAT_MEMBER))
+    app.add_handler(CallbackQueryHandler(on_verify_callback, pattern=r"^verify:"))
 
     # Registreer berichtenhandler (alleen tekstberichten)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
