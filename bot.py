@@ -350,6 +350,90 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+# ============================================================
+# REFERRAL PROGRAM — public commands (everyone in the group can use)
+# ============================================================
+async def toprefs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/toprefs — show current month's referral leaderboard."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{FLEXBOT_SERVER}/api/leaderboard")
+            data = r.json()
+        if not data.get("ok"):
+            await update.message.reply_text("Leaderboard unavailable right now, try again later.")
+            return
+        board = data.get("leaderboard") or []
+        month = data.get("month", "this month")
+        if not board:
+            await update.message.reply_text(
+                f"🏆 *Referral leaderboard ({month})*\n\nNo invites yet this month — be the first!\n\nUse /myref to grab your link.",
+                parse_mode="Markdown",
+            )
+            return
+        lines = [f"🏆 *Referral leaderboard ({month})*\n"]
+        medals = ["🥇", "🥈", "🥉"]
+        for entry in board[:10]:
+            rank = entry.get("rank", 0)
+            badge = medals[rank - 1] if rank <= 3 else f"{rank}."
+            name = entry.get("name", "??")
+            invites = entry.get("invites", 0)
+            plural = "invite" if invites == 1 else "invites"
+            lines.append(f"{badge}  *{name}*  —  {invites} {plural}")
+        lines.append("\n💰 Top 1 at month end wins 1 month free of Flexbot.")
+        lines.append("Use /myref to see your stats and link.")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        logger.warning(f"toprefs failed: {e}")
+        await update.message.reply_text("Couldn't fetch leaderboard right now.")
+
+
+async def myref_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/myref <api_key> — show YOUR referral stats + invite link.
+
+    Customers DM the bot with their api_key from the install preset, or paste it
+    after the command in the group (will be deleted to keep it private).
+    """
+    args = context.args or []
+    api_key = args[0].strip() if args else ""
+    if not api_key:
+        await update.message.reply_text(
+            "Send your invite stats privately:\n\n"
+            "DM me with:\n"
+            "  /myref <your_api_key>\n\n"
+            "Your api_key is in the .set preset you got with the installer "
+            "(InpEaApiKey, starts with `fb_`).",
+            parse_mode="Markdown",
+        )
+        return
+    if not api_key.startswith("fb_"):
+        await update.message.reply_text("That doesn't look like a valid api_key (should start with `fb_`).")
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{FLEXBOT_SERVER}/api/myref", params={"api_key": api_key})
+            data = r.json()
+        if not data.get("ok"):
+            await update.message.reply_text(f"Couldn't load your stats: {data.get('error', 'unknown')}")
+            return
+        link = data.get("ref_link", "—")
+        month = data.get("invites_this_month", 0)
+        total = data.get("total_invites", 0)
+        rank = data.get("rank_this_month", "—")
+        msg = (
+            f"🎯 *Your referral stats*\n\n"
+            f"📎 Your invite link:\n`{link}`\n\n"
+            f"📊 This month: *{month}* invites  (rank #{rank})\n"
+            f"📈 All-time: *{total}* invites\n\n"
+            f"💰 Top 1 at month end wins 1 month free!\n"
+            f"Share your link, climb the leaderboard, win.\n\n"
+            f"See full board: /toprefs"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        logger.warning(f"myref failed: {e}")
+        await update.message.reply_text("Couldn't fetch your stats right now.")
+
+
 import re
 
 # Profanity and scam patterns
@@ -792,6 +876,10 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("reset", reset_command))
+    # Referral program - open to all group members
+    app.add_handler(CommandHandler("toprefs", toprefs_command))
+    app.add_handler(CommandHandler("myref", myref_command))
+    app.add_handler(CommandHandler("leaderboard", toprefs_command))
 
     # Registreer berichtenhandler (alleen tekstberichten)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
