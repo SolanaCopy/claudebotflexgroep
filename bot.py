@@ -386,7 +386,7 @@ async def toprefs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             paid = entry.get("paid_invites", 0)
             grp = entry.get("group_invites", 0)
             lines.append(f"{badge}  *{name}*  —  {pts} pts  ({paid}p / {grp}g)")
-        lines.append("\n💰 Top 1 wins **+1 month free** (existing customer) or a **LIFETIME license** (non-customer).")
+        lines.append("\n💰 Top non-customer at month end wins a **LIFETIME Flexbot license**.")
         lines.append("Use /myref to get your link and join the race.")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as e:
@@ -442,12 +442,13 @@ async def myref_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if tg_link else
             "💬 Group invite link: ask the admin to generate one for you.\n\n"
         )
-        # Customers earn on BOTH paid (10pt) + group (1pt). Non-customers compete
-        # for the LIFETIME prize via group joins only (1pt each).
+        # Only NON-CUSTOMERS compete for the prize (the LIFETIME license is
+        # specifically the bait for new members). Existing customers see their
+        # stats too but no prize line — they can still refer organically.
         if is_customer:
-            paid_block = f"🌐 Website link (paid signups, {weights.get('paid', 10)}pt each):\n`{link}`\n\n"
-            prize_line = "💰 Top 1 at month end wins **+1 month free** Flexbot!"
-            share_line = "Share both links, climb the leaderboard, win."
+            paid_block = f"🌐 Website link (paid signups):\n`{link}`\n\n"
+            prize_line = "ℹ️ The monthly prize is reserved for non-customers (helps grow the community)."
+            share_line = "Share if you want — referrals still get tracked here."
         else:
             paid_block = ""
             prize_line = "💰 Top 1 at month end wins a **LIFETIME Flexbot license** 🚀"
